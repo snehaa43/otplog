@@ -52,6 +52,7 @@ export async function POST(request: NextRequest) {
         signature,
       },
       provider: result.provider,
+      ...(result.devOtp ? { devOtp: result.devOtp } : {}),
     });
   } catch (error: unknown) {
     console.error("Error in /api/auth/send-otp:", error);

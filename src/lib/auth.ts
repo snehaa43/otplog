@@ -8,7 +8,9 @@ export const AUTH_COOKIE_NAME = "auth_session";
 
 export interface SessionUser {
   target: string;
-  type: "email";
+  type: "email" | "phone" | "google";
+  name?: string;
+  photoUrl?: string;
   sessionId: string;
   loginAt: string;
 }
@@ -40,13 +42,20 @@ export function verifyOtpSignature(
 /**
  * Generates an encrypted/signed JWT session cookie token.
  */
-export async function createSessionToken(user: { target: string; type?: string }): Promise<string> {
+export async function createSessionToken(user: {
+  target: string;
+  type?: "email" | "phone" | "google";
+  name?: string;
+  photoUrl?: string;
+}): Promise<string> {
   const sessionId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
   const loginAt = new Date().toISOString();
 
   return await new SignJWT({
     target: user.target,
-    type: "email",
+    type: user.type || "email",
+    name: user.name || null,
+    photoUrl: user.photoUrl || null,
     sessionId,
     loginAt,
   })
@@ -64,7 +73,9 @@ export async function verifySessionToken(token: string): Promise<SessionUser | n
     const { payload } = await jwtVerify(token, SECRET_KEY_UINT8);
     return {
       target: payload.target as string,
-      type: "email",
+      type: (payload.type as "email" | "phone" | "google") || "email",
+      name: (payload.name as string) || undefined,
+      photoUrl: (payload.photoUrl as string) || undefined,
       sessionId: payload.sessionId as string,
       loginAt: payload.loginAt as string,
     };
@@ -74,13 +85,21 @@ export async function verifySessionToken(token: string): Promise<SessionUser | n
 }
 
 /**
- * Helper to mask sensitive email address for display.
+ * Helper to mask sensitive email address or phone numbers for display.
  */
-export function maskEmail(email: string): string {
-  const [name, domain] = email.trim().toLowerCase().split("@");
-  if (!name || !domain) return email;
-  if (name.length <= 2) {
-    return `${name[0]}***@${domain}`;
+export function maskTarget(target: string, type: "email" | "phone" | "google"): string {
+  if (type === "email" || (type === "google" && target.includes("@"))) {
+    const [name, domain] = target.trim().toLowerCase().split("@");
+    if (!name || !domain) return target;
+    if (name.length <= 2) {
+      return `${name[0]}***@${domain}`;
+    }
+    return `${name.slice(0, 2)}***${name.slice(-1)}@${domain}`;
+  } else {
+    const cleaned = target.trim();
+    if (cleaned.length < 6) return cleaned;
+    const last4 = cleaned.slice(-4);
+    const start = cleaned.slice(0, cleaned.length - 4);
+    return `${start}****${last4}`;
   }
-  return `${name.slice(0, 2)}***${name.slice(-1)}@${domain}`;
 }
