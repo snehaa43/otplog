@@ -1,10 +1,9 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Mail,
-  Phone,
   ArrowRight,
   Shield,
   RefreshCw,
@@ -14,19 +13,13 @@ import {
   CheckCircle2,
   Loader2,
 } from "lucide-react";
-import CountryCodeSelector, { COUNTRIES, Country } from "@/components/CountryCodeSelector";
 import OtpInput from "@/components/OtpInput";
 import {
   auth,
   GoogleAuthProvider,
   signInWithPopup,
-  signInWithPhoneNumber,
-  RecaptchaVerifier,
-  ConfirmationResult,
   isFirebaseConfigured,
 } from "@/lib/firebase";
-
-type AuthTab = "email" | "phone";
 
 interface EmailOtpTokenPayload {
   target: string;
@@ -38,19 +31,12 @@ interface EmailOtpTokenPayload {
 export default function LoginPage() {
   const router = useRouter();
 
-  // Navigation / Mode State
-  const [activeTab, setActiveTab] = useState<AuthTab>("email");
+  // Mode State
   const [step, setStep] = useState<"input" | "otp">("input");
 
   // Email form state
   const [email, setEmail] = useState("");
   const [emailTokenPayload, setEmailTokenPayload] = useState<EmailOtpTokenPayload | null>(null);
-
-  // Phone form state (Firebase)
-  const [selectedCountry, setSelectedCountry] = useState<Country>(COUNTRIES[0]);
-  const [phoneNumber, setPhoneNumber] = useState("");
-  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
-  const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
 
   // OTP Verification state
   const [otp, setOtp] = useState("");
@@ -81,56 +67,24 @@ export default function LoginPage() {
     return () => clearInterval(interval);
   }, [step, resendCooldown]);
 
-  // Clean up recaptcha on unmount
-  useEffect(() => {
-    return () => {
-      if (recaptchaVerifierRef.current) {
-        try {
-          recaptchaVerifierRef.current.clear();
-        } catch {
-          // ignore cleanup error
-        }
-        recaptchaVerifierRef.current = null;
-      }
-    };
-  }, []);
-
-  const getFullPhoneNumber = () => {
-    const clean = phoneNumber.trim().replace(/^0+/, "");
-    return `${selectedCountry.dial_code}${clean}`;
-  };
-
   const getMaskedTarget = () => {
-    if (activeTab === "email") {
-      const cleanEmail = email.trim().toLowerCase();
-      const [user, domain] = cleanEmail.split("@");
-      if (!user || !domain) return cleanEmail;
-      if (user.length <= 2) return `${user[0]}***@${domain}`;
-      return `${user.slice(0, 2)}***${user.slice(-1)}@${domain}`;
-    }
-    const target = getFullPhoneNumber();
-    if (target.length < 6) return target;
-    const last4 = target.slice(-4);
-    const start = target.slice(0, target.length - 4);
-    return `${start}****${last4}`;
+    const cleanEmail = email.trim().toLowerCase();
+    const [user, domain] = cleanEmail.split("@");
+    if (!user || !domain) return cleanEmail;
+    if (user.length <= 2) return `${user[0]}***@${domain}`;
+    return `${user.slice(0, 2)}***${user.slice(-1)}@${domain}`;
   };
 
   const formatFirebaseError = (err: unknown, defaultMsg: string) => {
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("region enabled") || msg.includes("SMS unable to be sent until this region enabled")) {
-      return "SMS region disabled. Go to Firebase Console > Authentication > Settings > SMS region policy and allow your country, or add a test phone number.";
-    }
     if (msg.includes("auth/configuration-not-found") || msg.includes("auth/operation-not-allowed")) {
-      return "Provider not enabled in Firebase. Go to Firebase Console > Authentication > Sign-in method and enable it.";
+      return "Google Sign-In is not enabled in Firebase. Go to Firebase Console > Authentication > Sign-in method and enable Google.";
     }
-    if (msg.includes("auth/billing-not-enabled")) {
-      return "Firebase requires Cloud Billing / Blaze plan for sending real carrier SMS. You can test for free by adding your number under Firebase Console > Authentication > Phone > Phone numbers for testing.";
+    if (msg.includes("auth/unauthorized-domain")) {
+      return "This domain is not authorized in Firebase. Add your domain to Firebase Console > Authentication > Settings > Authorized domains.";
     }
-    if (msg.includes("auth/invalid-phone-number")) {
-      return "Invalid phone number. Please check country code and number.";
-    }
-    if (msg.includes("auth/quota-exceeded")) {
-      return "SMS quota exceeded. Add test phone numbers in Firebase Console for free testing.";
+    if (msg.includes("auth/popup-closed-by-user")) {
+      return "";
     }
     if (msg.includes("auth/too-many-requests")) {
       return "Too many attempts. Please wait a moment and try again.";
@@ -178,7 +132,7 @@ export default function LoginPage() {
     } catch (err: unknown) {
       console.error("Google sign in error:", err);
       const msg = formatFirebaseError(err, "Failed to sign in with Google.");
-      if (!msg.includes("popup-closed-by-user")) {
+      if (msg) {
         setErrorMsg(msg);
       }
     } finally {
@@ -186,121 +140,56 @@ export default function LoginPage() {
     }
   };
 
-  // 2. Setup Firebase Recaptcha Verifier
-  const setupRecaptcha = () => {
-    if (!auth) {
-      throw new Error("Firebase Auth is not available.");
-    }
-    if (!recaptchaVerifierRef.current) {
-      recaptchaVerifierRef.current = new RecaptchaVerifier(auth, "recaptcha-container", {
-        size: "invisible",
-        callback: () => {
-          // reCAPTCHA solved
-        },
-        "expired-callback": () => {
-          setErrorMsg("reCAPTCHA expired. Please try sending code again.");
-        },
-      });
-    }
-    return recaptchaVerifierRef.current;
-  };
-
-  // 3. Send OTP (Email or Phone)
+  // 2. Send Email OTP
   const handleSendOtp = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setErrorMsg(null);
     setSuccessToast(null);
 
-    if (activeTab === "email") {
-      const cleanEmail = email.trim().toLowerCase();
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(cleanEmail)) {
-        setErrorMsg("Please enter a valid email address.");
-        return;
+    const cleanEmail = email.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setErrorMsg("Please enter a valid email address.");
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const res = await fetch("/api/auth/send-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "email",
+          target: cleanEmail,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to send verification code.");
       }
 
-      setIsLoading(true);
-
-      try {
-        const res = await fetch("/api/auth/send-otp", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            type: "email",
-            target: cleanEmail,
-          }),
-        });
-
-        const data = await res.json();
-
-        if (!res.ok) {
-          throw new Error(data.error || "Failed to send verification code.");
-        }
-
-        setEmailTokenPayload(data.token);
-        if (data.devOtp) {
-          setDevOtp(data.devOtp);
-        } else {
-          setDevOtp(null);
-        }
-        setStep("otp");
-        setOtp("");
-        setResendCooldown(60);
-        setCanResend(false);
-        setSuccessToast(`Verification code sent to ${cleanEmail}`);
-      } catch (err: unknown) {
-        setErrorMsg(err instanceof Error ? err.message : "Failed to send code.");
-      } finally {
-        setIsLoading(false);
-      }
-    } else {
-      // Phone OTP via Firebase
-      const fullPhone = getFullPhoneNumber();
-      const digits = fullPhone.replace(/\D/g, "");
-      if (digits.length < 7 || digits.length > 15) {
-        setErrorMsg("Please enter a valid mobile number with country code.");
-        return;
-      }
-
-      if (!auth || !isFirebaseConfigured) {
-        setErrorMsg(
-          "Firebase Phone Auth is not configured. Please add NEXT_PUBLIC_FIREBASE_* keys to .env.local"
-        );
-        return;
-      }
-
-      setIsLoading(true);
-
-      try {
-        const appVerifier = setupRecaptcha();
-        const confirmation = await signInWithPhoneNumber(auth, fullPhone, appVerifier);
-        setConfirmationResult(confirmation);
+      setEmailTokenPayload(data.token);
+      if (data.devOtp) {
+        setDevOtp(data.devOtp);
+      } else {
         setDevOtp(null);
-        setStep("otp");
-        setOtp("");
-        setResendCooldown(60);
-        setCanResend(false);
-        setSuccessToast(`SMS verification code sent to ${fullPhone}`);
-      } catch (err: unknown) {
-        console.error("Firebase phone auth error:", err);
-        // Reset recaptcha if failed
-        if (recaptchaVerifierRef.current) {
-          try {
-            recaptchaVerifierRef.current.clear();
-          } catch {
-            // ignore
-          }
-          recaptchaVerifierRef.current = null;
-        }
-        const msg = formatFirebaseError(err, "Failed to send SMS OTP.");
-        setErrorMsg(msg);
-      } finally {
-        setIsLoading(false);
       }
+      setStep("otp");
+      setOtp("");
+      setResendCooldown(60);
+      setCanResend(false);
+      setSuccessToast(`Verification code sent to ${cleanEmail}`);
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to send code.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // 4. Verify OTP Code
+  // 3. Verify OTP Code
   const handleVerifyOtp = useCallback(
     async (codeToVerify?: string) => {
       const finalOtp = (codeToVerify || otp).trim();
@@ -313,68 +202,39 @@ export default function LoginPage() {
       setIsLoading(true);
 
       try {
-        if (activeTab === "email") {
-          if (!emailTokenPayload) {
-            throw new Error("Session expired. Please request a new code.");
-          }
-
-          const res = await fetch("/api/auth/verify-otp", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              target: emailTokenPayload.target,
-              type: emailTokenPayload.type,
-              otp: finalOtp,
-              expiresAt: emailTokenPayload.expiresAt,
-              signature: emailTokenPayload.signature,
-            }),
-          });
-
-          const data = await res.json();
-          if (!res.ok) {
-            throw new Error(data.error || "Invalid verification code.");
-          }
-
-          router.push("/dashboard");
-        } else {
-          // Verify Phone OTP with Firebase ConfirmationResult
-          if (!confirmationResult) {
-            throw new Error("Phone session expired. Please request a new code.");
-          }
-
-          const userCredential = await confirmationResult.confirm(finalOtp);
-          const user = userCredential.user;
-
-          // Create backend session cookie
-          const res = await fetch("/api/auth/firebase-session", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              target: user.phoneNumber || getFullPhoneNumber(),
-              type: "phone",
-            }),
-          });
-
-          if (!res.ok) {
-            throw new Error("Failed to establish authenticated session.");
-          }
-
-          router.push("/dashboard");
+        if (!emailTokenPayload) {
+          throw new Error("Session expired. Please request a new code.");
         }
+
+        const res = await fetch("/api/auth/verify-otp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            target: emailTokenPayload.target,
+            type: emailTokenPayload.type,
+            otp: finalOtp,
+            expiresAt: emailTokenPayload.expiresAt,
+            signature: emailTokenPayload.signature,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Invalid verification code.");
+        }
+
+        router.push("/dashboard");
       } catch (err: unknown) {
         console.error("Verification error:", err);
         setErrorMsg(err instanceof Error ? err.message : "Verification failed.");
         setIsLoading(false);
       }
     },
-    [activeTab, otp, emailTokenPayload, confirmationResult, router]
+    [otp, emailTokenPayload, router]
   );
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 bg-zinc-50 text-zinc-950">
-      {/* Invisible reCAPTCHA container for Firebase Phone Auth */}
-      <div id="recaptcha-container"></div>
-
       <div className="w-full max-w-sm">
         {/* Header */}
         <div className="text-center mb-6">
@@ -385,7 +245,7 @@ export default function LoginPage() {
             Welcome back
           </h1>
           <p className="mt-1 text-xs text-zinc-500">
-            Sign in with Google, Email, or Phone OTP
+            Sign in with Google or Email OTP
           </p>
         </div>
 
@@ -398,7 +258,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={handleGoogleSignIn}
                 disabled={isGoogleLoading || isLoading}
-                className="w-full h-11 bg-white hover:bg-zinc-50 text-zinc-900 border border-zinc-300 rounded-lg font-medium text-xs flex items-center justify-center gap-2.5 transition-all active:scale-[0.99] disabled:opacity-50"
+                className="w-full h-11 bg-white hover:bg-zinc-50 text-zinc-900 border border-zinc-300 rounded-lg font-medium text-xs flex items-center justify-center gap-2.5 transition-all active:scale-[0.99] disabled:opacity-50 cursor-pointer"
               >
                 {isGoogleLoading ? (
                   <>
@@ -436,95 +296,34 @@ export default function LoginPage() {
                   <div className="w-full border-t border-zinc-200"></div>
                 </div>
                 <span className="relative bg-white px-3 text-[11px] font-medium text-zinc-400 uppercase tracking-wider">
-                  or
+                  or email OTP
                 </span>
-              </div>
-
-              {/* Tab Selector */}
-              <div className="flex p-1 bg-zinc-100 rounded-lg mb-4 border border-zinc-200/50">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab("email");
-                    setErrorMsg(null);
-                  }}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-xs font-semibold transition-all ${
-                    activeTab === "email"
-                      ? "bg-black text-white shadow-xs"
-                      : "text-zinc-600 hover:text-black"
-                  }`}
-                >
-                  <Mail className="w-3.5 h-3.5" />
-                  <span>Email</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab("phone");
-                    setErrorMsg(null);
-                  }}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-xs font-semibold transition-all ${
-                    activeTab === "phone"
-                      ? "bg-black text-white shadow-xs"
-                      : "text-zinc-600 hover:text-black"
-                  }`}
-                >
-                  <Phone className="w-3.5 h-3.5" />
-                  <span>Phone</span>
-                </button>
               </div>
 
               {/* Form */}
               <form onSubmit={handleSendOtp} className="space-y-4">
-                {activeTab === "email" ? (
-                  <div>
-                    <label
-                      htmlFor="email"
-                      className="block text-xs font-semibold text-zinc-800 mb-1.5"
-                    >
-                      Email address
-                    </label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-400">
-                        <Mail className="w-4 h-4" />
-                      </div>
-                      <input
-                        id="email"
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="name@example.com"
-                        required
-                        className="w-full pl-9.5 pr-3.5 h-11 bg-white border border-zinc-300 rounded-lg text-black text-xs placeholder:text-zinc-400 focus:outline-none focus:border-black transition-all"
-                      />
+                <div>
+                  <label
+                    htmlFor="email"
+                    className="block text-xs font-semibold text-zinc-800 mb-1.5"
+                  >
+                    Email address
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-400">
+                      <Mail className="w-4 h-4" />
                     </div>
+                    <input
+                      id="email"
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="name@example.com"
+                      required
+                      className="w-full pl-9.5 pr-3.5 h-11 bg-white border border-zinc-300 rounded-lg text-black text-xs placeholder:text-zinc-400 focus:outline-none focus:border-black transition-all"
+                    />
                   </div>
-                ) : (
-                  <div>
-                    <label
-                      htmlFor="phone"
-                      className="block text-xs font-semibold text-zinc-800 mb-1.5"
-                    >
-                      Mobile number
-                    </label>
-                    <div className="flex rounded-lg">
-                      <CountryCodeSelector
-                        selected={selectedCountry}
-                        onSelect={setSelectedCountry}
-                        disabled={isLoading}
-                      />
-                      <input
-                        id="phone"
-                        type="tel"
-                        value={phoneNumber}
-                        onChange={(e) => setPhoneNumber(e.target.value)}
-                        placeholder="98765 43210"
-                        required
-                        className="flex-1 min-w-0 pl-3 pr-3.5 h-11 bg-white border border-l-0 border-zinc-300 rounded-r-lg text-black text-xs placeholder:text-zinc-400 focus:outline-none focus:border-black transition-all"
-                      />
-                    </div>
-                  </div>
-                )}
+                </div>
 
                 {/* Error Banner */}
                 {errorMsg && (
@@ -538,7 +337,7 @@ export default function LoginPage() {
                 <button
                   type="submit"
                   disabled={isLoading || isGoogleLoading}
-                  className="w-full mt-1 h-11 bg-black hover:bg-zinc-800 text-white rounded-lg font-semibold text-xs flex items-center justify-center gap-2 active:scale-[0.99] transition-all disabled:opacity-50 disabled:pointer-events-none"
+                  className="w-full mt-1 h-11 bg-black hover:bg-zinc-800 text-white rounded-lg font-semibold text-xs flex items-center justify-center gap-2 active:scale-[0.99] transition-all disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
                 >
                   {isLoading ? (
                     <>
@@ -576,7 +375,7 @@ export default function LoginPage() {
                       setErrorMsg(null);
                       setSuccessToast(null);
                     }}
-                    className="p-0.5 text-zinc-600 hover:text-black rounded"
+                    className="p-0.5 text-zinc-600 hover:text-black rounded cursor-pointer"
                     title="Change"
                   >
                     <Edit2 className="w-3 h-3" />
@@ -607,7 +406,7 @@ export default function LoginPage() {
                       setOtp(devOtp);
                       handleVerifyOtp(devOtp);
                     }}
-                    className="px-2 py-1 text-[11px] font-semibold bg-black text-white hover:bg-zinc-800 rounded transition-all active:scale-95"
+                    className="px-2 py-1 text-[11px] font-semibold bg-black text-white hover:bg-zinc-800 rounded transition-all active:scale-95 cursor-pointer"
                   >
                     Auto-fill & Verify
                   </button>
@@ -642,7 +441,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => handleVerifyOtp()}
                 disabled={isLoading || otp.length !== 6}
-                className="w-full h-11 bg-black hover:bg-zinc-800 text-white rounded-lg font-semibold text-xs flex items-center justify-center gap-2 active:scale-[0.99] transition-all disabled:opacity-40 disabled:pointer-events-none"
+                className="w-full h-11 bg-black hover:bg-zinc-800 text-white rounded-lg font-semibold text-xs flex items-center justify-center gap-2 active:scale-[0.99] transition-all disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
               >
                 {isLoading ? (
                   <>
@@ -664,7 +463,7 @@ export default function LoginPage() {
                     type="button"
                     onClick={() => handleSendOtp()}
                     disabled={isLoading}
-                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-black hover:underline"
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-black hover:underline cursor-pointer"
                   >
                     <RefreshCw className="w-3 h-3" />
                     <span>Resend code</span>

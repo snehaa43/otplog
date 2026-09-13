@@ -4,9 +4,6 @@ import {
   Auth,
   GoogleAuthProvider,
   signInWithPopup,
-  signInWithPhoneNumber,
-  RecaptchaVerifier,
-  ConfirmationResult,
 } from "firebase/auth";
 
 const firebaseConfig = {
@@ -36,5 +33,4 @@ if (typeof window !== "undefined" && isFirebaseConfigured) {
   }
 }
 
-export { auth, GoogleAuthProvider, signInWithPopup, signInWithPhoneNumber, RecaptchaVerifier };
-export type { ConfirmationResult };
+export { auth, GoogleAuthProvider, signInWithPopup };
