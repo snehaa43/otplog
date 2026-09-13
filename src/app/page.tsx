@@ -123,6 +123,9 @@ export default function LoginPage() {
     if (msg.includes("auth/configuration-not-found") || msg.includes("auth/operation-not-allowed")) {
       return "Provider not enabled in Firebase. Go to Firebase Console > Authentication > Sign-in method and enable it.";
     }
+    if (msg.includes("auth/billing-not-enabled")) {
+      return "Firebase requires Cloud Billing / Blaze plan for sending real carrier SMS. You can test for free by adding your number under Firebase Console > Authentication > Phone > Phone numbers for testing.";
+    }
     if (msg.includes("auth/invalid-phone-number")) {
       return "Invalid phone number. Please check country code and number.";
     }
