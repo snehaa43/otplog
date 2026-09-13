@@ -242,7 +242,7 @@ export default function LoginPage() {
             <Shield className="w-6 h-6" />
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-black">
-            Welcome back
+            Auth
           </h1>
           <p className="mt-1 text-xs text-zinc-500">
             Sign in with Google or Email OTP
